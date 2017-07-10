@@ -14,6 +14,7 @@ echo "Starting new containers:"
 if [ "$ELASTICSEARCH_ENABLED" = "yes" ]; then
 	echo -n "so-elasticsearch: "
 	docker run --name=so-elasticsearch \
+		--restart=always \
 		--detach \
 		--env "bootstrap_memory_lock=true" \
 		--env ES_JAVA_OPTS="-Xms$ELASTICSEARCH_HEAP -Xmx$ELASTICSEARCH_HEAP" \
@@ -34,6 +35,7 @@ fi
 if [ "$LOGSTASH_ENABLED" = "yes" ]; then
 	echo -n "so-logstash: "
 	docker run --name=so-logstash \
+		--restart=always \
 		--detach \
 		--env LS_JAVA_OPTS="-Xms$LOGSTASH_HEAP -Xmx$LOGSTASH_HEAP" \
 		--link=so-elasticsearch:elasticsearch \
@@ -57,6 +59,7 @@ fi
 if [ "$KIBANA_ENABLED" = "yes" ]; then
 	echo -n "so-kibana: "
 	docker run --name=so-kibana \
+		--restart=always \
 		--detach \
 		--env "KIBANA_DEFAULTAPPID=$KIBANA_DEFAULTAPPID" \
 		--link=so-elasticsearch:elasticsearch \
@@ -69,7 +72,8 @@ fi
 if [ "$ELASTALERT_ENABLED" = "yes" ]; then
         echo -n "so-elastalert: "
         docker run --name=so-elastalert \
-                --detach \
+                --restart=always \
+		--detach \
                 --link=so-elasticsearch:elasticsearch \
                 --volume /etc/elastalert/rules:/etc/elastalert/rules/ \
 		--volume /var/log/elastalert:/var/log/elastalert/ \
