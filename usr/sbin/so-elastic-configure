@@ -32,6 +32,9 @@ mkdir -p /var/log/elasticsearch
 chown -R 1000:1000 /nsm/elasticsearch
 chown -R 1000:1000 /var/log/elasticsearch
 cp -av $SRC/etc/elasticsearch/* /etc/elasticsearch/
+if [ -f /etc/elasticsearch/elasticsearch.yml ]; then
+	sed -i "s/cluster\.name.*/cluster\.name: \"$HOSTNAME\"/" /etc/elasticsearch/elasticsearch.yml
+fi
 echo "Done!"
 
 header "Configuring Logstash"
