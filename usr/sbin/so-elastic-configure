@@ -103,6 +103,30 @@ while read EACH_LINE; do
 	fi
 done < $ELASTICONF
 
+# Check for internet connectivity -- if none, disable DomainStats.
+
+echo
+echo "Checking internet connectivity...waiting up to 10 seconds for a response."
+echo
+
+. $SOCONF
+
+wget -q --spider "$DOMAIN_STATS_URL"
+echo "Connecting to ...$DOMAIN_STATS_URL"
+
+
+if [ $? -eq 0 ]; then
+        echo
+	echo "Connection successful..."
+	if grep -q 'DOMAIN_STATS_ENABLED="no"' $SOCONF; then
+		sed -i 's/DOMAIN_STATS_ENABLED="no"/DOMAIN_STATS_ENABLED="yes"/' $SOCONF
+	fi
+else
+        echo "No internet connectivity, so disabling DomainStats."
+        echo
+        sed -i 's/DOMAIN_STATS_ENABLED="yes"/DOMAIN_STATS_ENABLED="no"/' $SOCONF
+fi
+
 # Get total installed memory
 TOTAL_MEM=`grep MemTotal /proc/meminfo | awk '{print $2}' | sed -r 's/.{3}$//'`
 
@@ -192,7 +216,7 @@ echo "Done!"
 header "Reconfiguring syslog-ng to send logs to Elastic"
 FILE="/etc/syslog-ng/syslog-ng.conf"
 cp $FILE $FILE.bak
-if ! grep -q d_logstash $FILE; then 
+if ! grep -q d_logstash $FILE; then
 	sed -i '/^destination d_elsa/a destination d_logstash { tcp("127.0.0.1" port(6050) template("$(format-json --scope selected_macros --scope nv_pairs --exclude DATE --key ISODATE)\\n")); };' $FILE
 fi
 sed -i 's/log { destination(d_elsa); };/log { destination(d_logstash); };/' $FILE
