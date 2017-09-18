@@ -35,13 +35,32 @@ if [ "$DOMAIN_STATS_ENABLED" = "yes" ]; then
 	if docker ps | grep -q so-domainstats; then
 		echo "Already started!"
 	else
-		docker run --name=so-domainstats \
-			--detach \
-			--publish 20000:20000 \
-			--volume /var/log/domain_stats:/var/log/domain_stats \
-			$DOMAIN_STATS_OPTIONS \
-			$DOCKERHUB/so-domainstats
-			docker network connect --alias domainstats $DOCKERNET so-domainstats
+		# Check for internet connectivity -- if none, disable DomainStats.
+
+		echo
+		echo "Checking internet connectivity...waiting up to 10 seconds for a response."
+		echo
+
+		. /etc/nsm/securityonion.conf
+
+		wget -q --spider "$DOMAIN_STATS_URL"
+		echo "Connecting to ...$DOMAIN_STATS_URL"
+		echo
+
+		if [ $? -eq 0 ]; then
+			echo "Connection successful..."
+			echo
+			docker run --name=so-domainstats \
+				--detach \
+				--publish 20000:20000 \
+				--volume /var/log/domain_stats:/var/log/domain_stats \
+				$DOMAIN_STATS_OPTIONS \
+				$DOCKERHUB/so-domainstats
+				docker network connect --alias domainstats $DOCKERNET so-domainstats
+		else
+                        echo "No internet connectivity, so not starting DomainStats."
+                        echo
+                fi
 	fi
 fi
 
@@ -56,6 +75,7 @@ if [ "$ELASTICSEARCH_ENABLED" = "yes" ]; then
 			--env ES_JAVA_OPTS="-Xms$ELASTICSEARCH_HEAP -Xmx$ELASTICSEARCH_HEAP" \
 			--env "http.host=0.0.0.0" \
 			--env "transport.host=127.0.0.1" \
+			--env "cluster.name=$HOSTNAME" \
 			--publish 9200:9200 \
 			--publish 9300:9300 \
 			--ulimit memlock=-1:-1 \
