@@ -129,22 +129,31 @@ if [ "$KIBANA_ENABLED" = "yes" ]; then
 		echo -n "so-kibana: "
 		echo "Already started!"
 	else
-		source /etc/nsm/securityonion.conf
         	# Wait for ElasticSearch to come up, so that we can query for version infromation
-        	echo -n "Waiting for ElasticSearch..."
-        	COUNT=0
+		echo
+		echo -n "Waiting for ElasticSearch..."
+		COUNT=0
 		ELASTICSEARCH_CONNECTED="no"
 		while [[ "$COUNT" -le 60 ]]; do
-                	curl --output /dev/null --silent --head --fail http://"$ELASTICSEARCH_HOST":"$ELASTICSEARCH_PORT"
+			source /etc/nsm/securityonion.conf
+			curl --output /dev/null --silent --head --fail http://"$ELASTICSEARCH_HOST":"$ELASTICSEARCH_PORT"
 			if [ $? -eq 0 ]; then
 				ELASTICSEARCH_CONNECTED="yes"
 				echo "connected!"
+				echo
 				# Compare current version of ES with previously stored version.
-				CURRENT_KIBANA_VERSION=$(curl -s "http://$ELASTICSEARCH_HOST:$ELASTICSEARCH_PORT" | jq .version.number | sed 's/"//g')
+				CURRENT_KIBANA_VERSION=$(curl -s http://$ELASTICSEARCH_HOST:$ELASTICSEARCH_PORT | jq .version.number | sed 's/"//g')
 				if [ "$CURRENT_KIBANA_VERSION" != "$KIBANA_VERSION" ]; then
 					# Apply Kibana config and, if successful, update the version in /etc/nsm/securityonion.conf
-					/usr/sbin/so-elastic-configure-kibana > /dev/null 2>&1 &&
-					sed -i "s/KIBANA_VERSION=.*/KIBANA_VERSION=$CURRENT_KIBANA_VERSION/" /etc/nsm/securityonion.conf
+					echo
+					echo "Current Kibana version: $CURRENT_KIBANA_VERSION"
+					echo
+					echo "Stored Kibana version: $KIBANA_VERSION"
+					echo
+					echo "Updating..."
+					echo
+					sed -i "s/KIBANA_VERSION=.*/KIBANA_VERSION=$CURRENT_KIBANA_VERSION/" /etc/nsm/securityonion.conf &&
+					/usr/sbin/so-elastic-configure-kibana > /dev/null 2>&1
 				fi
 				break
 			else
