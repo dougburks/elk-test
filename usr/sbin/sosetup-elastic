@@ -1093,7 +1093,25 @@ else
 #		fi
   	fi
 fi
-
+if [ "$ELASTIC" = "YES" ]; then
+	if [ $SENSOR -eq 1 ]; then
+		if [ $SERVER -ne 1 ]; then
+			# Ask about log forwarding
+			TEXT="Would you like to forward logs from your sensor to Logstash on the master server?\n\nIf you choose to forward logs, syslog-ng will forward all logs previously destined for Logstash on the sensor over an SSH tunnel to port 6050 on the master server.\n\n"
+			YES="Yes, forward my logs!"
+			NO="No, don't forward."
+			zenity --question --title="$TITLE" --text="$TEXT" --ok-label="$YES" --cancel-label="$NO"
+			ANSWER="$?"
+			if [ $ANSWER -eq 1 ]; then
+				[ $DEBUG -eq 1 ] && echo "DEBUG: Clicked No.  Not forwarding logs."
+			else
+				[ $DEBUG -eq 1 ] && echo "DEBUG: Clicked Yes. Forwarding logs."
+				FORWARD="yes"
+				FORWARD_CONFIRM="- Forward logs from $HOSTNAME to $SERVERNAME"
+			fi
+		fi
+	fi
+fi
 
 #########################################
 # If just writing a file, do it and exit
@@ -1124,6 +1142,7 @@ $BRO_LB_PROCS_CONFIRM\
 $IDS_RULESET_ACTION\
 $IDS_HOME_NET_CONFIRM\
 $ELASTIC_ACTION_CONFIRM\
+$FORWARD_CONFIRM
 \n\
 We're about to make changes to your system!\n\
 \n\
@@ -2063,6 +2082,12 @@ ufw allow proto tcp from $DOCKER_NETWORK to $DOCKER_INTERFACE port $REVERSE_PORT
 source /etc/nsm/securityonion.conf
 curl -XPUT http://\$ELASTICSEARCH_HOST:\$ELASTICSEARCH_PORT/_cluster/settings -H'Content-Type: application/json' -d '{"persistent": {"search": {"remote": {"$HOSTNAME": {"seeds": ["$DOCKER_INTERFACE:$REVERSE_PORT"]}}}}}'
 EOF
+		if [ "$FORWARD" = "yes" ]; then
+			sed -i 's/destination d_logstash { tcp("127.0.0.1" port(6050)/destination d_logstash { tcp("127.0.0.1" port(9000)/' /etc/syslog-ng/syslog-ng.conf
+			service syslog-ng restart
+			echo 'AUTOSSH_OPTIONS="-L 9000:localhost:6050"' >> /root/.ssh/securityonion_ssh.conf
+		
+		fi
 	fi
 
 fi
