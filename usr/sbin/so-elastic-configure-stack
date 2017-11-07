@@ -37,27 +37,40 @@ for USER in elasticsearch logstash kibana elastalert curator freqserver domainst
 done
 
 header "Configuring ElasticSearch"
-mkdir -p /etc/elasticsearch
-mkdir -p /nsm/elasticsearch
-mkdir -p /var/log/elasticsearch
-chown -R elasticsearch:elasticsearch /nsm/elasticsearch
-chown -R elasticsearch:elasticsearch /var/log/elasticsearch
+
+# Create Elasticsearch directories
+for i in /etc/elasticsearch/ /nsm/elasticsearch /var/log/elasticsearch; do
+	[ ! -d $i ] && mkdir -p $i
+done
+
 touch /etc/nsm/crossclustertab
-chown elasticsearch:elasticsearch /etc/nsm/crossclustertab 
-cp -av $SRC/etc/elasticsearch/* /etc/elasticsearch/
-cp -av $SRC/etc/logrotate.d/crossclustercheck /etc/logrotate.d/crossclustercheck
-if [ -f /etc/elasticsearch/elasticsearch.yml ]; then
-        sed -i "s/cluster\.name.*/cluster\.name: \"$HOSTNAME\"/" /etc/elasticsearch/elasticsearch.yml
+
+for i in /nsm/elasticsearch /var/log/elasticsearch /etc/nsm/crossclustertab; do
+	chown -R elasticsearch:elasticsearch $i
+done
+
+cp -av $SRC/etc/elasticsearch/log4j2.properties /etc/elasticsearch/log4j2.properties
+
+ES_YAML="/etc/elasticsearch/elasticsearch.yml"
+if [ -f "$ES_YAML" ]; then
+	# Preserve transport settings if present
+	if grep -q transport $ES_YAML; then
+		:
+	else
+		cp -av $SRC/$ES_YAML $ES_YAML
+	fi
+	sed -i "s/cluster\.name.*/cluster\.name: \"$HOSTNAME\"/" $ES_YAML
 fi
 echo "Done!"
 
 header "Configuring Logstash"
-mkdir -p /nsm/logstash
-mkdir -p /var/log/logstash
-mkdir -p /etc/logstash/conf.d/
-mkdir -p /etc/logstash/optional/
-chown -R logstash:logstash /nsm/logstash
-chown -R logstash:logstash /var/log/logstash
+for i in /nsm/logstash /var/log/logstash /etc/logstash/conf.d/ /etc/logstash/optional/; do
+	[ ! -d $i ] && mkdir -p $i
+done
+for i in /nsm/logstash /var/log/logstash; do
+	chown -R logstash:logstash $i
+done
+
 cp -av $SRC/configfiles/*.conf /etc/logstash/conf.d/
 cp -av $SRC/configfiles-setup_required/8*_postprocess_dns_*.conf /etc/logstash/optional/
 cp -av $SRC/configfiles-setup_required/85*_postprocess_freq_analysis_*.conf /etc/logstash/optional/
@@ -68,43 +81,45 @@ cp -av $SRC/lib/dictionaries /lib/
 echo "Done!"
 
 header "Configuring Kibana"
-mkdir -p /etc/kibana
-mkdir -p /var/log/kibana
-chown -R kibana:kibana /etc/kibana
-chown -R kibana:kibana /var/log/kibana
+for i in /etc/kibana /var/log/kibana; do
+	[ ! -d $i ] && mkdir -p $i
+	chown -R kibana:kibana $i
+done
 cp -av $SRC/etc/kibana/* /etc/kibana/
 echo "Done!"
 
 header "Configuring Elastalert"
-mkdir -p /etc/elastalert/rules
-mkdir -p /var/log/elastalert
-chown -R elastalert:elastalert /etc/elastalert/rules
-chown -R elastalert:elastalert /var/log/elastalert
+for i in /etc/elastalert/rules /var/log/elastalert; do
+	[ ! -d $i ] && mkdir -p $i
+	chown -R elastalert:elastalert $i
+done
 cp -av $SRC/etc/elastalert/rules/* /etc/elastalert/rules/
 echo "Done!"
 
 header "Configuring Curator"
-mkdir -p /etc/curator/config
-mkdir -p /etc/curator/action
-mkdir -p /var/log/curator
-chown -R curator:curator /etc/curator
-chown -R curator:curator /var/log/curator
+for i in /etc/curator/config /etc/curator/action /var/log/curator; do
+	[ ! -d $i ] && mkdir -p $i
+done
+for i in /etc/curator/ /var/log/curator; do
+	chown -R curator:curator $i
+done
 cp -av $SRC/etc/curator/config/* /etc/curator/config/
 cp -av $SRC/etc/curator/action/* /etc/curator/action/
 echo "Done!"
 
 header "Configuring freq_server"
-mkdir -p /var/log/freq_server
-mkdir -p /var/log/freq_server_dns
+for i in /var/log/freq_server /var/log/freq_server_dns; do
+	[ ! -d $i ] && mkdir -p $i
+done
 chown -R freqserver:freqserver /var/log/freq_server
 echo "Done!"
 
 header "Configuring domain_stats"
 mkdir -p /var/log/domain_stats
-mkdir -p /var/log/domain_stats
 chown -R domainstats:domainstats /var/log/domain_stats
 echo "Contacting WHOIS server for connectivity..."
 echo
+
 # Check for whois connectivity
 whois google.com | grep 'Domain Name'
 if [ $? -eq 1 ]; then
