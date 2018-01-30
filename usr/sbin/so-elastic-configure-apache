@@ -13,8 +13,18 @@ FILE="/etc/apache2/session"
 LC_ALL=C </dev/urandom tr -dc '[:alnum:]' | head -c 64 >> $FILE
 chown www-data:www-data $FILE
 chmod 660 $FILE
-ln -s ssl-cert-snakeoil.pem /etc/ssl/certs/securityonion.pem
-ln -s ssl-cert-snakeoil.key /etc/ssl/private/securityonion.key
+if [ ! -L /etc/ssl/certs/securityonion.pem ]; then
+	echo "Creating symlink for for snakeoil.pem..."
+	ln -s ssl-cert-snakeoil.pem /etc/ssl/certs/securityonion.pem
+else
+	echo "Symlink for snakeoil.pem already exists!"
+fi
+if [ ! -L /etc/ssl/private/securityonion.key ]; then
+	echo "Creating symlink for snakeoil.key..."
+	ln -s ssl-cert-snakeoil.key /etc/ssl/private/securityonion.key
+else
+	echo "Symlink for snakeoil.key already exists!"
+fi
 a2dissite elsa
 a2dismod perl
 # Remove ELSA link from Squert
