@@ -24,10 +24,28 @@ if [ "$LOGSTASH_ENABLED" = "yes" ]; then
                         rm -f /etc/logstash/conf.d/8008_postprocess_dns_whois_age.conf
                 fi
 
+                if [ "$LOGSTASH_INPUT_REDIS" = "yes" ]; then
+			cp /etc/logstash/conf.d.redis.input/0900_input_redis.conf /etc/logstash/conf.d/
+		else
+			rm -f /etc/logstash/conf.d/0900_input_redis.conf
+		fi
+
+		CONFD="/etc/logstash/conf.d"
+                if [ "$LOGSTASH_OUTPUT_REDIS" = "yes" ]; then
+			# Allow logstash container to output to redis
+			sed -i.bak 's|bind 127.0.0.1|bind 0.0.0.0|g' /etc/redis/redis.conf
+                	ufw allow proto tcp from 172.18.0.0/24 to 172.18.0.1 port 6379 >/dev/null
+			service redis-server start >/dev/null
+			cp /etc/logstash/conf.d/0000_input_syslogng.conf /etc/logstash/conf.d.redis.output/
+			CONFD="/etc/logstash/conf.d.redis.output/"
+		fi
+
 		# Publish ports to localhost 127.0.0.1 ONLY
                 docker run --name=so-logstash \
                         --detach \
                         --env LS_JAVA_OPTS="-Xms$LOGSTASH_HEAP -Xmx$LOGSTASH_HEAP" \
+                        --network-alias=logstash \
+                        --network="${DOCKERNET}" \
 			--publish $LOGSTASH_PUBLISH_IP:5044:5044 \
 			--publish $LOGSTASH_PUBLISH_IP:6050:6050 \
                         --publish $LOGSTASH_PUBLISH_IP:6051:6051 \
@@ -38,7 +56,7 @@ if [ "$LOGSTASH_ENABLED" = "yes" ]; then
                         --volume /etc/logstash/logstash.yml:/usr/share/logstash/config/logstash.yml:ro \
                         --volume /etc/logstash/logstash-template.json:/logstash-template.json:ro \
 			--volume /etc/logstash/beats-template.json:/beats-template.json:ro \
-                        --volume /etc/logstash/conf.d:/usr/share/logstash/pipeline/:ro \
+                        --volume $CONFD:/usr/share/logstash/pipeline/:ro \
                         --volume /etc/nsm/rules:/etc/nsm/rules:ro \
                         --volume /lib/dictionaries:/lib/dictionaries:ro \
                         --volume /nsm/import:/nsm/import:ro \
@@ -46,6 +64,5 @@ if [ "$LOGSTASH_ENABLED" = "yes" ]; then
                         --volume /var/log/logstash:/var/log/logstash \
                         $LOGSTASH_OPTIONS \
                         $DOCKERHUB/so-logstash
-                        docker network connect --alias logstash $DOCKERNET so-logstash
         fi
 fi

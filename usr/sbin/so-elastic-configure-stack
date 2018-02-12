@@ -51,14 +51,15 @@ else
 	cp -av $ES_YAML $ES_YAML_BAK
 	cp -av $SRC/$ES_YAML $ES_YAML
 	
-	# Preserve custom settings, if present
-	# Transport settings
+	# If old config file had custom settings, migrate them to new config file
+
+	# transport settings
 	# https://www.elastic.co/guide/en/elasticsearch/reference/current/modules-transport.html
-	grep transport $ES_YAML_BAK >> $ES_YAML
+	grep "transport" $ES_YAML_BAK >> $ES_YAML
        
-	# Low/High watermark settings
+	# cluster.routing.allocation.disk settings
 	# https://www.elastic.co/guide/en/elasticsearch/reference/current/disk-allocator.html#disk-allocator
-        grep watermark $ES_YAML_BAK >> $ES_YAML
+        grep "cluster.routing.allocation.disk" $ES_YAML_BAK >> $ES_YAML
 fi
 
 # Set cluster name

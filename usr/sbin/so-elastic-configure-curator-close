@@ -1,0 +1,12 @@
+#!/bin/bash
+
+. /usr/sbin/so-elastic-common
+. /etc/nsm/securityonion.conf
+
+CURATOR_CLOSE="/etc/curator/action/close.yml"
+
+if [ -f $CURATOR_CLOSE ]; then
+        sed -i "s/Close indices older than.* days/Close indices older than $CURATOR_CLOSE_DAYS days/" $CURATOR_CLOSE
+        sed -i "s/unit_count:.*/unit_count: $CURATOR_CLOSE_DAYS/" $CURATOR_CLOSE
+fi
+

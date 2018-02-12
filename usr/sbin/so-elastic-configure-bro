@@ -1,0 +1,33 @@
+#!/bin/bash
+
+. /usr/sbin/so-elastic-common
+
+. /etc/nsm/securityonion.conf
+
+BRO="/opt/bro/share/bro"
+
+LOCALBRO="${BRO}/site/local.bro"
+
+if [ -f ${LOCALBRO} ] ; then
+
+	# If Bro hasn't already been configured to output JSON,
+	# then we need to configure it and restart Bro.
+	# We also need to handle the case where folks have
+	# manually disabled JSON by commenting out the @load line.
+	if ! grep "@load json-logs" ${LOCALBRO} >/dev/null 2>&1; then 
+
+		header "Configuring Bro to output in JSON"
+
+		cp -av ${SRC}/opt/bro/share/bro/json-logs ${BRO}
+
+cat << EOF >> ${LOCALBRO}
+
+# Output logs in JSON format
+@load json-logs
+EOF
+
+		if [ ${BRO_ENABLED} = "yes" ]; then
+			/usr/sbin/nsm_sensor_ps-restart --only-bro
+		fi
+	fi
+fi

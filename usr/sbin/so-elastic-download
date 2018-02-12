@@ -38,19 +38,23 @@ function download {
 	echo "Done!"
 
 	header "Installing new packages"
-	for i in securityonion-samples-bro libapache2-mod-authnz-external; do
+	for i in securityonion-samples-bro libapache2-mod-authnz-external redis-server; do
 		if dpkg -l | grep -q $i; then
 		:
 		else
+		echo $i
 		apt-get install -y $i > /dev/null
 		fi
 	done
 	echo "Done!"
 
+	# redis-server starts automatically upon installation
+	service redis-server stop > /dev/null 2>&1
+	update-rc.d -f redis-server disable > /dev/null 2>&1
+
 	header "Updating existing packages"
 	# Need to ensure we're running the latest versions of these packages
-	# so don't just check to see if they've already been installed,
-	# force the update
+	# so don't just check to see if they've already been installed, force the update
 	apt-get install -y securityonion-setup securityonion-sostat securityonion-ossec-rules securityonion-sguil-client securityonion-sguil-sensor securityonion-sguil-server
 	echo "Done!"
 }

@@ -39,12 +39,13 @@ if [ "$KIBANA_ENABLED" = "yes" ]; then
                         docker run --name=so-kibana \
                                 --detach \
                                 --env "KIBANA_DEFAULTAPPID=$KIBANA_DEFAULTAPPID" \
+	                        --network-alias=kibana \
+        	                --network="${DOCKERNET}" \
                                 --publish 127.0.0.1:5601:5601 \
                                 --volume /etc/kibana/:/usr/share/kibana/config/:ro \
                                 --volume /var/log/kibana:/var/log/kibana \
                                 $KIBANA_OPTIONS \
                                 $DOCKERHUB/so-kibana
-                                docker network connect --alias kibana $DOCKERNET so-kibana
                         # Compare current version of ES with previously stored version.
                         CURRENT_KIBANA_VERSION=$(curl -s "http://$ELASTICSEARCH_HOST:$ELASTICSEARCH_PORT" | jq .version.number | sed 's/"//g')
                         if [ "$CURRENT_KIBANA_VERSION" != "$KIBANA_VERSION" ]; then

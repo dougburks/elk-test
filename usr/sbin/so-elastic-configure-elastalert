@@ -8,11 +8,22 @@ if [ ${ELASTALERT_ENABLED} = "yes" ]; then
 
 	header "Configuring ElastAlert"
 
-# commenting out for now
-#	if ! curl -s -XGET http://${ELASTICSEARCH_HOST}:${ELASTICSEARCH_PORT}/${ELASTALERT_INDEX} | grep -q "no such index"; then
-#		curl -s -XDELETE http://${ELASTICSEARCH_HOST}:${ELASTICSEARCH_PORT}/${ELASTALERT_INDEX}
-#	fi
-#	curl -s -XPUT http://${ELASTICSEARCH_HOST}:${ELASTICSEARCH_PORT}/_template/elastalert -H'Content-Type: application/json' -d'{"index_patterns" : "elastalert*", "settings": { "number_of_shards" : 1, "number_of_replicas" : 0 }, "mappings" : { "search": {"properties": {"hits": {"type": "integer"}, "version": {"type": "integer"}, "match_body.source_ip": {"type": "ip"}, "match_body.destination_ip": {"type": "ip"}}}}}' > /dev/null && echo && echo "Template configured for ElastAlert." && echo "Done!"
+	# We need to wait for ElastAlert to initialize indices
+	MAX_WAIT=240
+	while curl -s -XGET http://${ELASTICSEARCH_HOST}:${ELASTICSEARCH_PORT}/elastalert_status | grep -q "no such index" ; do
+		wait_step=$(( ${wait_step} + 1 ))
+		if [ ${wait_step} -gt ${MAX_WAIT} ]; then
+			echo "ERROR: Elasticsearch not available for more than ${MAX_WAIT} seconds."
+			exit 5
+		fi
+		sleep 1s;
+	done
+	
+	# Disable replicas so that ES status will show green
+        curl -s -XPUT "${ELASTICSEARCH_HOST}:${ELASTICSEARCH_PORT}/elastalert*/_settings" \
+             -H 'Content-Type: application/json' \
+             -d'{"index" : {"number_of_replicas" : 0}}'
+	echo
 
 else
 	echo "ElastAlert disabled, so not configuring..."

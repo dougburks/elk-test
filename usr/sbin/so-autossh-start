@@ -2,12 +2,16 @@
 
 . /usr/sbin/so-common
 
+. /etc/nsm/securityonion.conf
+
 # Defaults
+AUTOSSH_LOG="/var/log/nsm/so-autossh.log"
 SERVERALIVEINTERVAL="60"
 SERVERALIVECOUNTMAX="3"
 KEY="/root/.ssh/securityonion"
 ES_HOST="localhost"
 ES_TRANSPORT="9300"
+DOCKER_INTERFACE="172.18.0.1"
 AUTOSSH_OPTIONS=""
 
 # Defaults can be overridden in config file
@@ -22,13 +26,30 @@ if [ -f ${CONFIG} ]; then
 	# Load settings from config
 	source ${CONFIG}
 
-	export AUTOSSH_GATETIME=0
-	/usr/bin/autossh -M 0 -f -q -N \
-		-o "ServerAliveInterval ${SERVERALIVEINTERVAL}" \
-		-o "ServerAliveCountMax ${SERVERALIVECOUNTMAX}" \
-		-i ${KEY} \
-		-R ${DOCKER_INTERFACE}:${REVERSE_PORT}:${ES_HOST}:${ES_TRANSPORT} \
-		${AUTOSSH_OPTIONS} \
-		${SSH_USERNAME}@${SERVERNAME}
+	# If elasticsearch is enabled and REVERSE_PORT is set, 
+	# create reverse port forward for cross cluster search
+	if [ ${ELASTICSEARCH_ENABLED} = "yes" ] && [ -n ${REVERSE_PORT} ]; then
+		REVERSE_PORT_FORWARD="-R ${DOCKER_INTERFACE}:${REVERSE_PORT}:${ES_HOST}:${ES_TRANSPORT}"
+	fi
 
+	# Restart even if ssh fails on the first run
+	export AUTOSSH_GATETIME=0
+
+	# Avoid starting multiple instances
+	if ! pgrep -f "/usr/lib/autossh/autossh -M 0" >/dev/null; then
+		# Start autossh with the following parameters:
+		# -M 0 - disable autossh monitoring since we use ServerAliveInterval and ServerAliveCountMax
+		# -f - background
+		# The remaining parameters are passed to ssh
+		# autossh logs to syslog by default
+		# we redirect stderr to $AUTOSSH_LOG
+		/usr/bin/autossh -M 0 -f -q -N \
+			-o "ServerAliveInterval ${SERVERALIVEINTERVAL}" \
+			-o "ServerAliveCountMax ${SERVERALIVECOUNTMAX}" \
+			-i ${KEY} \
+			${REVERSE_PORT_FORWARD} \
+			${AUTOSSH_OPTIONS} \
+			${SSH_USERNAME}@${SERVERNAME} \
+			2>>${AUTOSSH_LOG}
+	fi
 fi

@@ -1,0 +1,12 @@
+#!/bin/bash
+
+. /usr/sbin/so-common
+
+if pgrep -f "/usr/lib/autossh/autossh -M 0" >/dev/null; then
+	echo "so-autossh is running:"
+	pgrep -af "/usr/lib/autossh/autossh -M 0"
+	echo "stopping..."
+	pkill -f "/usr/lib/autossh/autossh -M 0"
+else
+	echo "so-autossh is not running"
+fi

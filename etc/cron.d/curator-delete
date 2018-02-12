@@ -4,4 +4,5 @@
 
 SHELL=/bin/sh
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
-* * * * * root docker exec so-curator curator --config /etc/curator/config/curator.yml /etc/curator/action/delete.yml > /dev/null 2>&1
+
+* * * * * root /usr/sbin/so-elastic-configure-curator-delete > /dev/null 2>&1; docker exec so-curator curator --config /etc/curator/config/curator.yml /etc/curator/action/delete.yml > /dev/null 2>&1

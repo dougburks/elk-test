@@ -1,6 +1,7 @@
 #!/bin/bash
 #
-# Copyright (C) 2010-2017 Doug Burks and Security Onion
+# Copyright (C) 2010-2014 Doug Burks
+# Copyright (C) 2015-2018 Security Onion Solutions, LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License Version 2 as
@@ -121,7 +122,7 @@ SECURITYONION_CONF_MASTER=`mktemp`
 # CUSTOM gives access to all options
 CUSTOM=0
 # Elastic is now enabled by default
-ELASTIC="YES"
+ELASTIC="yes"
 # Create /nsm if it doesn't already exist
 mkdir -p /nsm
 # Calculate half of available disk space for Elastic logs
@@ -147,6 +148,8 @@ ARGS=("$@")
 REVERSE_PORT=50000
 DOCKER_INTERFACE="172.18.0.1"
 DOCKER_NETWORK="172.18.0.0/24"
+LOGSTASH_OUTPUT_REDIS="no"
+LOGSTASH_INPUT_REDIS="no"
 
 #########################################
 # Debug
@@ -166,19 +169,18 @@ function ask() {
 #########################################
 # Welcome screen
 #########################################
-TEXT="WARNINGS AND DISCLAIMERS!\n\
+TEXT="Welcome to Security Onion Elastic Setup!\n\
 \n\
-Experimental Mode is BLEEDING EDGE and TOTALLY UNSUPPORTED!\n\
-If this breaks your system, you get to keep both pieces!\n\
-This is a work in progress and is in constant flux.\n\
-This is intended to build a quick prototype proof of concept so you can see what our\n\
-ultimate Elastic configuration might look like.  This configuration will change drastically\n\
-over time leading up to the final release.\n\
-Do NOT run this on a system that you care about!\n\
-Do NOT run this on a system that has data that you care about!\n\
-This should only be run on a TEST box with TEST data!\n\
-This is only designed for standalone boxes and does NOT support distributed deployments.\n\
-Experimental Mode may result in nausea, vomiting, or a burning sensation.\n\
+Elastic Setup will configure the following services:\n\
+\n\
+Elasticsearch\n\
+Logstash\n\
+Kibana\n\
+Squert\n\
+Sguil\n\
+Bro\n\
+Snort/Suricata\n\
+netsniff-ng\n\
 \n\
 Would you like to continue?"
 if [ "$WRITEANSWERFILE" ]; then
@@ -217,23 +219,12 @@ fi
 #########################################
 
 if [ $TOTAL_MEM -lt 8000 ]; then zenity --question --title="$TITLE" --text="$MEM_TEXT" --ok-label="$YES" --cancel-label="$NO" --no-wrap
-	if [ $? = 1 ]; then
-		if [ $DEBUG -eq 1 ]; then
-			echo "DEBUG: Clicked No.  Exiting." && exit 1
-		else
-			exit 1
-		fi
-	fi
+	[ $? = 1 ] && exit 1
         [ $DEBUG -eq 1 ] && echo "DEBUG: Continuing, despite low RAM."
 fi
+
 if [ $CORES -lt 2 ]; then zenity --question --title="$TITLE" --text="$CORE_TEXT" --ok-label="$YES" --cancel-label="$NO" --no-wrap
-	if [ $? = 1 ]; then
-		if [ $DEBUG -eq 1 ]; then
-			echo "DEBUG: Clicked No.  Exiting." && exit 1
-		else
-			exit 1
-		fi
-	fi
+	[ $? = 1 ] && exit 1
 	[ $DEBUG -eq 1 ] && echo "DEBUG: Continuing, despite low core count."
 fi
 
@@ -250,22 +241,16 @@ Evaluation Mode is recommended for first-time users or standalone VMs:\n\
 \n\
 Production Mode is recommended for production deployments\n\
 as it gives you more control over the details of your system\n\
-and allows you to build a distributed sensor network.  You choose:\n\
-- Sguil server, Sguil sensor, or both\n\
-- which IDS engine to use (Snort or Suricata)\n\
-- which IDS ruleset(s) to use (Emerging Threats, Snort Subscriber (Talos), or both)\n\
-- how many processes to run for Snort/Suricata/Bro"
+and allows you to build a distributed deployment.  You choose:\n\
+- build a new master server or connect to an existing master server\n\
+- enable or disable network sensor services\n\
+- store logs locally or forward to master server\n"
 SETUP=""
 SETUP=`zenity --list --radiolist \
         --column "1" --column "2" --hide-header --title="$TITLE" \
         TRUE "Evaluation Mode" FALSE "Production Mode" --text="$TEXT"`
-if [ $? = 1 ]; then
-	if [ $DEBUG -eq 1 ]; then
-		echo "DEBUG: Clicked Cancel.  Exiting." && exit 1
-	else
-		exit 1
-	fi
-fi
+[ $? = 1 ] && exit 1
+
 [ "$SETUP" == "" ] && exit
 [ "$SETUP" == "Production Mode" ] && ADVANCED_SETUP="1" || ADVANCED_SETUP="0"
 if [ $ADVANCED_SETUP -eq 0 ]; then
@@ -295,83 +280,35 @@ if [ $ADVANCED_SETUP -eq 0 ]; then
         fi
 	SERVER=1
 	SENSOR=1
-        ELASTIC="YES"
+        ELASTIC="yes"
 	SERVERNAME="localhost"
 	SENSOR_CONFIRM_1="- Configure Snort and Bro to monitor the following interface:\n"
 	SENSOR_CONFIRM_2="$INTERFACES\n"
 else
 	[ $DEBUG -eq 1 ] && echo "DEBUG: Selected Production Mode."
-	# Ask which components to configure
-	TEXT="If this is the first machine in a distributed deployment, choose Server.\n\
-This machine will only run Sguil, Squert, and Kibana and will not monitor any network interfaces.\n\
+	TEXT="Do you want to build a new Security Onion deployment or add to an existing deployment?\n\
 \n\
-If this is a sensor for a distributed deployment (you've already installed the Server), choose Sensor.\n\
-You will need to be able to SSH to the existing Server box with an account with sudo privileges.\n\
+If you choose New, this machine will be the master server and will run the Kibana and Squert web interfaces.\n\
 \n\
-Otherwise, choose Standalone to configure both Server and Sensor components on this box."
-	COMPONENTS=`zenity --height=300 --list --radiolist --column="1" --column="2" --hide-header --title="$TITLE" --text="$TEXT" TRUE Server FALSE Sensor FALSE Standalone`
-	case $COMPONENTS in
-        Standalone)
-                [ $DEBUG -eq 1 ] && echo "DEBUG: Selected Standalone."
+If you already have a master server, choose Existing.\n\
+You will need to be able to SSH to the existing master server with an account that has sudo privileges.\n"
+	DEPLOYMENT=`zenity --height=250 --list --radiolist --column="1" --column="2" --hide-header --title="$TITLE" --text="$TEXT" TRUE New FALSE Existing`
+	case $DEPLOYMENT in
+	New)
+                [ $DEBUG -eq 1 ] && echo "DEBUG: Selected New."
 		SERVER=1
-		SENSOR=1
-		SERVERNAME="localhost"
-		if [ $TOTAL_MEM -lt 3000 ];then zenity --question --title="$TITLE" --text="$MEM_TEXT" --ok-label="$YES" --cancel-label="$NO" --no-wrap
-			if [ $? = 1 ]; then
-				if [ $DEBUG -eq 1 ]; then
-					echo "DEBUG: Clicked No.  Exiting." && exit 1
-				else
-					exit 1
-				fi
-			fi
-		[ $DEBUG -eq 1 ] && echo "DEBUG: Continuing, despite low RAM."
-		fi
-		;;
-	Server)
-                [ $DEBUG -eq 1 ] && echo "DEBUG: Selected Server."
-		SERVER=1
-		SENSOR=0
 		SERVERNAME="localhost"
 		IDS_LB_PROCS_CONFIRM=""
 		BRO_LB_PROCS_CONFIRM=""
-		if [ $TOTAL_MEM -lt 2000 ];then zenity --question --title="$TITLE" --text="This machine currently has "$HR_MEM"GB of RAM allocated.\n\For best performance, please ensure the machine is allocated at least 2GB of RAM.\n\n\Consult the following link for more information:\n\https://github.com/Security-Onion-Solutions/security-onion/wiki/Hardware\n\n\
-Click 'No' to stop setup and adjust the amount of RAM allocated to this machine.\n\
-Otherwise, click 'Yes' to continue." --ok-label="$YES" --cancel-label="$NO" --no-wrap
-			if [ $? = 1 ]; then
-				if [ $DEBUG -eq 1 ]; then
-					echo "DEBUG: Clicked No.  Exiting." && exit 1
-				else
-					exit 1
-				fi
-			fi
-		[ $DEBUG -eq 1 ] && echo "DEBUG: Continuing, despite low RAM."
-		fi
 		;;
-	Sensor)
-                [ $DEBUG -eq 1 ] && echo "DEBUG: Selected Sensor."
+	Existing)
+                [ $DEBUG -eq 1 ] && echo "DEBUG: Selected Existing."
 		SERVER=0
-		SENSOR=1
 		TEXT="What is the hostname or IP address of the master server that this sensor should connect to?"
 		SERVERNAME_CONFIRMED="no"
-		if [ $TOTAL_MEM -lt 3000 ];then zenity --question --title="$TITLE" --text="$MEM_TEXT" --ok-label="$YES" --cancel-label="$NO" --no-wrap
-			if [ $? = 1 ]; then
-				if [ $DEBUG -eq 1 ]; then
-					echo "DEBUG: Clicked No.  Exiting." && exit 1
-				else
-					exit 1
-				fi
-			fi
-		[ $DEBUG -eq 1 ] && echo "DEBUG: Continuing, despite low RAM."
-		fi
 		while [ $SERVERNAME_CONFIRMED = "no" ]; do
 			SERVERNAME=`zenity --title="$TITLE" --text="$TEXT" --entry`
-			if [ $? = 1 ]; then
-				if [ $DEBUG -eq 1 ]; then
-					echo "DEBUG: Clicked Cancel.  Exiting."  && exit 1
-				else
-					exit 1
-				fi
-			fi
+			[ $? = 1 ] && exit 1
 			# Did the user enter the hostname or IP address of the local box?
 			if [ "$SERVERNAME" = "$HOSTNAME" ]; then
 				zenity --error --title "$TITLE" --text="That is the hostname of this box\!\r \
@@ -404,13 +341,7 @@ firewall rules."
 		SENSOR_CONFIRM_3="no"
 		while [[ $SENSOR_CONFIRM_3 = "no" ]]; do
 		SSH_USERNAME=`zenity --title="$TITLE" --text="$TEXT" --entry`
-                        if [ $? = 1 ]; then
-                                if [ $DEBUG -eq 1 ]; then
-                                        echo "DEBUG: Clicked Cancel.  Exiting."  && exit 1
-                                else
-                                        exit 1
-                                fi
-                        fi
+			[ $? = 1 ] && exit 1
 			if [ x$SSH_USERNAME = "x" ]; then
 				zenity --error --title "$TITLE" --text="No username defined\!\r \
 \r\ \
@@ -426,29 +357,8 @@ Please provide a username that can SSH to the master server and execute sudo."
                 ;;
         esac
 
-	TEXT="Best Practices or Custom?\n\
-\n\
-If you'd like to use the Best Practices defaults, please select Best Practices.\n\
-\n\
-If you'd like to see all options, choose Custom."
-	CUSTOM=""
-	CUSTOM=`zenity --list --radiolist \
-        --column "1" --column "2" --hide-header --title="$TITLE" \
-        TRUE "Best Practices" FALSE "Custom" --text="$TEXT"`
-	if [ $? = 1 ]; then
-		if [ $DEBUG -eq 1 ]; then
-			echo "DEBUG: Clicked Cancel.  Exiting." && exit 1
-		else
-			exit 1
-		fi
-	fi
-	[ "$CUSTOM" == "" ] && exit
-	[ "$CUSTOM" == "Custom" ] && CUSTOM="1" || CUSTOM="0"
-	if [ $CUSTOM -eq 0 ]; then
-		[ $DEBUG -eq 1 ] && echo "DEBUG: Selected Best Practices."
-	else
-		[ $DEBUG -eq 1 ] && echo "DEBUG: Selected Custom."
-	fi
+
+
 fi
 
 #########################################
@@ -457,15 +367,17 @@ fi
 if [ $SERVER -eq 1 ]; then
 	USERNAME_CONFIRMED="no"
 	while [ $USERNAME_CONFIRMED = "no" ]; do
-		TEXT="What would you like your Sguil username to be?\r\rThis will be used when logging into Sguil, Squert, and Kibana.\r\rPlease use alphanumeric characters only."
+		TEXT="Let's create our first user account.\n\
+\n\
+This account will be used when logging into Kibana, Squert, and Sguil.\n\
+\n\
+What would you like the username to be?\n\
+\n\
+Please use alphanumeric characters only.\n\
+\n\
+You can create other usernames later using so-user-add."
 		SGUIL_CLIENT_USERNAME=`zenity --title="$TITLE" --text="$TEXT" --entry`
-		if [ $? = 1 ]; then
-			if [ $DEBUG -eq 1 ]; then
-				echo "DEBUG: Clicked Cancel. Exiting." && exit 1
-			else
-				exit 1
-			fi
-		fi
+		[ $? = 1 ] && exit 1
 		COMPRESSED="$(echo $SGUIL_CLIENT_USERNAME | sed -e 's/[^[:alnum:]]//g')"
 		if [ "$COMPRESSED" != "$SGUIL_CLIENT_USERNAME" ] || [ x$SGUIL_CLIENT_USERNAME = "x" ] ; then
 	    		zenity --error --title "$TITLE" --text="Invalid username\! \r \
@@ -484,33 +396,21 @@ fi
 if [ $SERVER -eq 1 ]; then
 	SGUIL_CLIENT_PASSWORD_CONFIRMED="no"
 	while [ $SGUIL_CLIENT_PASSWORD_CONFIRMED = "no" ]; do
-		TEXT="What would you like to set your password to?\n\
+		TEXT="Now let's set the password for this first user account.\n\
 \n\
-Password must be at least 6 characters.\n\
+This password will be used for Kibana, Squert, and Sguil.\n\
 \n\
-This password will be used for Sguil, Squert, and Kibana.\n\
+This password must be at least 6 characters.\n\
 \n\
-Once you've logged into these interfaces using this initial password, you can change it in the Sguil client."
+You can change this password later in the Sguil client or with so-user-passwd."
 		SGUIL_CLIENT_PASSWORD_1=`zenity --title="$TITLE" --text="$TEXT" --entry --hide-text`
-		if [ $? = 1 ]; then
-			if [ $DEBUG -eq 1 ]; then
-				echo "DEBUG: Clicked Cancel.  Exiting."  && exit 1
-			else
-				exit 1
-			fi
-		fi
+		[ $? = 1 ] && exit 1
 	        if [ "${#SGUIL_CLIENT_PASSWORD_1}" -lt "6" ]; then
 			zenity --error --title "$TITLE" --text="Password must be at least 6 characters\!"
 		else
 			TEXT="Please confirm what you would like to set your password to."
 			SGUIL_CLIENT_PASSWORD_2=`zenity --title="$TITLE" --text="$TEXT" --entry --hide-text`
-			if [ $? = 1 ]; then
-				if [ $DEBUG -eq 1 ]; then
-					echo "DEBUG: Clicked Cancel.  Exiting." && exit 1
-				else
-					exit 1
-				fi
-			fi
+			[ $? = 1 ] && exit 1
 			if [ "$SGUIL_CLIENT_PASSWORD_1" = "$SGUIL_CLIENT_PASSWORD_2" ]; then
 				SGUIL_CLIENT_PASSWORD_CONFIRMED="yes"
 				[ $DEBUG -eq 1 ] && echo "DEBUG: Password set."
@@ -520,7 +420,74 @@ Once you've logged into these interfaces using this initial password, you can ch
 		fi
 	done
 	SERVER_CONFIRM="- Create a Sguil server named $SGUIL_SERVER_NAME. \n"
-	SERVER_USER_CONFIRM="- Create a Sguil user named $SGUIL_CLIENT_USERNAME. \n"
+	SERVER_USER_CONFIRM="- Create a user account named $SGUIL_CLIENT_USERNAME. \n"
+fi
+
+#########################################
+# If node is enabled, pick from 3 node types
+#########################################
+NODE="Master"
+if [ $ADVANCED_SETUP -eq 1 ] && [ $SERVER -ne 1 ]; then
+	TEXT="To add to your existing deployment, please select a node type for this node.\n\
+\n\
+Forward Nodes generate and collect logs and forward them to the master server.\n\
+Full packet capture remains on Forward Nodes.\n\
+Forward Nodes do not run any Elastic stack processes.\n\
+Forward Nodes require less hardware than Heavy Nodes, but typically use more network bandwidth.\n\
+\n\
+Heavy Nodes generate and collect logs and store them locally.\n\
+Heavy Nodes run Elasticsearch and Logstash.\n\
+The master server queries Heavy Nodes via cross cluster search.\n\
+Heavy Nodes require more hardware than Forward Nodes, but typically use less network bandwidth.\n\
+\n\
+Storage Nodes do not generate logs themselves but simply extend the storage of the master server.\n\
+They require that the master server has already been configured to load balance to additional storage nodes.\n\
+Storage Nodes run Elasticsearch and Logstash.\n\
+The master server queries storage nodes via cross cluster search.\n\"
+	NODE=`zenity --height=400 --list --radiolist --column="1" --column="2" --hide-header --title="$TITLE" --text="$TEXT" TRUE Forward FALSE Heavy FALSE Storage`
+	case $NODE in
+	Forward)
+		SENSOR=1
+		FORWARD="yes"
+		;;
+	Heavy)
+		SENSOR=1
+		;;	
+	Storage)
+		SENSOR=0
+		LOGSTASH_INPUT_REDIS="yes"
+		IDS_LB_PROCS_CONFIRM=""
+		BRO_LB_PROCS_CONFIRM=""
+		SENSOR_CONFIRM_3=""
+		ELASTIC_ACTION_CONFIRM="- Configure as Elastic storage node.\n"
+		;;
+	*)
+                exit
+                ;;
+        esac
+fi
+
+#########################################
+# Best Practices or Custom
+#########################################
+if [ $ADVANCED_SETUP -eq 1 ] && [ $NODE != "Storage" ]; then
+TEXT="Best Practices or Custom?\n\
+\n\
+If you'd like to use the Best Practices defaults, please select Best Practices.\n\
+\n\
+If you'd like to see all options, choose Custom."
+	CUSTOM=""
+	CUSTOM=`zenity --list --radiolist \
+	--column "1" --column "2" --hide-header --title="$TITLE" \
+	TRUE "Best Practices" FALSE "Custom" --text="$TEXT"`
+	[ $? = 1 ] && exit 1
+	[ "$CUSTOM" == "" ] && exit
+	[ "$CUSTOM" == "Custom" ] && CUSTOM="1" || CUSTOM="0"
+	if [ $CUSTOM -eq 0 ]; then
+		[ $DEBUG -eq 1 ] && echo "DEBUG: Selected Best Practices."
+	else
+		[ $DEBUG -eq 1 ] && echo "DEBUG: Selected Custom."
+	fi
 fi
 
 #########################################
@@ -533,13 +500,7 @@ if [ $ADVANCED_SETUP -eq 1 ] && [ $SERVER -eq 1 ]; then
 	DAYSTOKEEP_CONFIRMED="no"
 	while [ $DAYSTOKEEP_CONFIRMED = "no" ]; do
 		DAYSTOKEEP=`zenity --entry --title "$TITLE" --text="How many days of data do you want to keep in your Sguil database?\n\nThis includes things like IDS alerts, PADS events, and PRADS session data.\n\nIf you need to change this later, you can change DAYSTOKEEP in /etc/nsm/securityonion.conf.\n\nPlease enter an integer.  The default is 30 days." --entry-text=30`
-		if [ $? = 1 ]; then
-			if [ $DEBUG -eq 1 ]; then
-				echo "DEBUG: Clicked Cancel.  Exiting." && exit 1
-			else
-				exit 1
-			fi
-		fi
+		[ $? = 1 ] && exit 1
 		COMPRESSED="$(echo $DAYSTOKEEP | sed -e 's/[^[:digit:]]//g')"
 		if [ "$COMPRESSED" != "$DAYSTOKEEP" ] || [ x$DAYSTOKEEP = "x" ]; then
 			zenity --error --title "$TITLE" --text "Invalid value! Please use integers only." 
@@ -552,13 +513,7 @@ if [ $ADVANCED_SETUP -eq 1 ] && [ $SERVER -eq 1 ]; then
 	DAYSTOREPAIR_CONFIRMED="no"
 	while [ $DAYSTOREPAIR_CONFIRMED = "no" ]; do
 		DAYSTOREPAIR=`zenity --entry --title "$TITLE" --text="How many days of data do you want to repair in your Sguil database?\n\nA daily cronjob stops Sguil, repairs the MySQL tables for the last X days, and then starts Sguil back up.\n\nIf you choose a higher value, Sguil will be down for longer.\n\nIf you need to change this later, you can change DAYSTOREPAIR in /etc/nsm/securityonion.conf.\n\nPlease enter an integer.  The default is 7 days." --entry-text=7`
-		if [ $? = 1 ];then
-			if [ $DEBUG -eq 1 ];then
-				echo "DEBUG: Clicked Cancel.  Exiting." && exit 1
-			else
-				exit 1
-			fi
-		fi
+		[ $? = 1 ] && exit 1
 		COMPRESSED="$(echo $DAYSTOREPAIR | sed -e 's/[^[:digit:]]//g')"
 		if [ "$COMPRESSED" != "$DAYSTOREPAIR" ] || [ x$DAYSTOREPAIR = "x" ]; then
 			zenity --error --title "$TITLE" --text "Invalid value! Please use integers only." 
@@ -568,16 +523,16 @@ if [ $ADVANCED_SETUP -eq 1 ] && [ $SERVER -eq 1 ]; then
 	done
 	fi
 
-	# Ask which IDS engine to use.
-	TEXT="Which IDS Engine would you like to use?"
-	IDS_ENGINE=`zenity --list --radiolist --column="1" --column="2" --hide-header --title="$TITLE" --text="$TEXT" TRUE Snort FALSE Suricata`
-	#[ -z $IDS_ENGINE ]
-	[ $? = 1 ] && [ $DEBUG -eq 1 ] && echo "DEBUG: Clicked Cancel.  Exiting." && exit 1
-        [ $DEBUG -eq 1 ] && echo "DEBUG: Selected $IDS_ENGINE."
-
 	# Ask which IDS ruleset to use.
-	TEXT="Which IDS ruleset would you like to use?"
-	IDS_RULESET=`zenity --width=600 --height=300 --list --radiolist --column="1" --column="Ruleset" --column="Ruleset" --column="Oinkcode required?" --hide-header --hide-column="2" --text="$TEXT" --title="$TITLE" \
+	TEXT="Which IDS ruleset would you like to use?\n\
+\n\
+This master server is responsible for downloading the IDS ruleset from the Internet.\n\
+\n\
+Sensors then pull a copy of this ruleset from the master server.\n\
+\n\
+If you select a commercial ruleset, it is your responsibility to purchase enough licenses\n\
+for all of your sensors in compliance with your vendor's policies.\n"
+	IDS_RULESET=`zenity --width=750 --height=350 --list --radiolist --column="1" --column="Ruleset" --column="Ruleset" --column="Oinkcode required?" --hide-header --hide-column="2" --text="$TEXT" --title="$TITLE" \
 	TRUE "ETOPEN" "Emerging Threats Open"  "no oinkcode required" \
 	FALSE "ETPRO" "Emerging Threats PRO" "requires ETPRO oinkcode" \
 	FALSE "TALOSET" "Snort Subscriber (Talos) ruleset and Emerging Threats NoGPL ruleset" "requires Snort Subscriber oinkcode" \
@@ -615,10 +570,46 @@ if [ $ADVANCED_SETUP -eq 1 ] && [ $SERVER -eq 1 ]; then
 		IDS_RULESET_ACTION="- Download the Snort Subscriber (Talos) ruleset using oinkcode $OINKCODE.\n- Download the Emerging Threats NoGPL ruleset.\n"
 		;;
 	*)
-		[ $? = 1 ] && [ $DEBUG -eq 1 ] && echo "DEBUG: Clicked Cancel.  Exiting." && exit 1
+		[ $? = 1 ] && exit 1
 		;;
 	esac
+
+	# Ask which IDS engine to use.
+	TEXT="Which IDS Engine would you like to use?\n\
+\n\
+For best results, use the corresponding engine for the ruleset you chose in the previous screen.\n\
+\n\
+For example, if you chose the Snort Talos ruleset, you should probably choose the Snort engine.\n\
+\n\
+Likewise, if you chose an Emerging Threats ruleset, you should probably choose the Suricata engine.\n"
+	IDS_ENGINE=`zenity --list --radiolist --column="1" --column="2" --hide-header --title="$TITLE" --text="$TEXT" TRUE Snort FALSE Suricata`
+	#[ -z $IDS_ENGINE ]
+	[ $? = 1 ] && exit 1
+        [ $DEBUG -eq 1 ] && echo "DEBUG: Selected $IDS_ENGINE."
+
 	# End of ADVANCED SETUP - SERVER
+fi
+
+#########################################
+# Network Sensor Services
+#########################################
+if [ $ADVANCED_SETUP -eq 1 ] && [ $SERVER -eq 1 ]; then
+TEXT="Network sensor services include:\n\
+\n\
+- Snort or Suricata for NIDS alerts\n\
+- Bro for protocol logging\n\
+- netsniff-ng for full packet capture\n\
+\n\
+For best performance, we recommend disabling network sensor services on master servers.\n\
+\n\
+Would you like to enable or disable network sensor services?"
+	SENSOR=""
+	SENSOR=`zenity --list --radiolist \
+	--column "1" --column "2" --hide-header --title="$TITLE" \
+	TRUE "Enable network sensor services" FALSE "Disable network sensor services" --text="$TEXT"`
+	[ $? = 1 ] && exit 1
+	[ "$SENSOR" == "" ] && exit
+	[ "$SENSOR" == "Enable network sensor services" ] && SENSOR="1" || SENSOR="0"
 fi
 
 #########################################
@@ -633,13 +624,7 @@ if [ $ADVANCED_SETUP -eq 1 ] && [ $SENSOR -eq 1 ]; then
 	PF_RING_SLOTS_CONFIRMED="no"
 	while [ $PF_RING_SLOTS_CONFIRMED = "no" ]; do
 		PF_RING_SLOTS=`zenity --entry --title "$TITLE" --text="What would you like to set PF__RING min__num__slots to?\n\nThe default is 4096.  For busy networks, you may want to increase this to a higher number like 65534.\n\nIf you need to change this later, you can modify /etc/modprobe.d/pf__ring.conf and reload the pf_ring module." --entry-text=4096`
-		if [ $? = 1 ]; then
-			if [ $DEBUG -eq 1 ]; then
-				echo "DEBUG: Clicked Cancel.  Exiting." && exit 1
-			else
-				exit 1
-			fi
-		fi
+		[ $? = 1 ] && exit 1
 		COMPRESSED="$(echo $PF_RING_SLOTS | sed -e 's/[^[:digit:]]//g')"
 		if [ "$COMPRESSED" != "$PF_RING_SLOTS" ] || [ x$PF_RING_SLOTS = "x" ]; then
 			zenity --error --title "$TITLE" --text "Invalid value! Please use integers only." 
@@ -877,19 +862,6 @@ Would you like to enable mmap I/O?"
 				PCAP_RING_SIZE_CONFIRMED="yes"
 			fi
 		done
-	else
-	# Note about disabling full packet capture
-	YES="Yes, Continue."
-	NO="No, Quit."
-	zenity --title "$TITLE" --question --text="Please note, if you choose not to enable full packet capture, you will not\nbe able to pivot from Sguil to PCAP, or to CapME to retrieve PCAP data.\n\nClick 'Yes' to continue without enabling full packet capture.\n\nOtherwise, click 'No' to exit setup and re-run it to enable the capture of this valuable data." --ok-label="$YES" --cancel-label="$NO" --no-wrap
-		if [ $? = 1 ]; then
-			if [ $DEBUG -eq 1 ]; then
-				echo "DEBUG: Clicked No.  Exiting." && exit 1
-			else
-				exit 1
-			fi
-		fi
-        [ $DEBUG -eq 1 ] && echo "DEBUG: Clicked Yes.  Continuing without enabling full packet capture."
 	fi
 
 	# Ask for CRIT_DISK_USAGE
@@ -917,7 +889,7 @@ fi # End of ADVANCED SETUP - SENSOR
 if [ $ADVANCED_SETUP -eq 1 ] && dpkg -l |grep "securityonion-onionsalt" |grep "ii" >/dev/null; then
 	SALT="yes"
 	if [ $CUSTOM -eq 1 ]; then
-TEXT="Salt can be enabled to help manage your entire sensor deployment.\n\
+TEXT="Salt can be enabled to help manage your entire Security Onion deployment.\n\
 \n\
 By default, Salt will automatically keep the following updated:\n\
 * OS user accounts\n\
@@ -925,7 +897,7 @@ By default, Salt will automatically keep the following updated:\n\
 * IDS rulesets\n\
 \n\
 Salt can also be used for remote execution, so you can run a command\n\
-and have it execute on all sensors across your deployment.\n\
+and have it execute on all boxes across your deployment.\n\
 \n\
 Would you like to enable Salt?"
 		YES="Yes, enable Salt!"
@@ -941,8 +913,6 @@ Would you like to enable Salt?"
 		fi
 	fi
 fi
-
-# End of ADVANCED SETUP
 
 #########################################
 # Ask whether or not to use Elastic
@@ -971,65 +941,73 @@ Would you like to enable the Elastic Stack?"
 	ANSWER="$?"
 	if [ $ANSWER -eq 0 ]; then
 		[ $DEBUG -eq 1 ] && echo "DEBUG: Enable Elastic Stack."
-		ELASTIC="YES"
+		ELASTIC="yes"
 	else
 		[ $DEBUG -eq 1 ] && echo "DEBUG: Disable Elastic Stack."
-		ELASTIC="NO"
-	fi
-
-	# If user chose to enable Elastic Stack, ask about log_size_limit
-	if [ "$ELASTIC" = "YES" ]; then
-		# If Advanced Setup, ask user
-		if [ $ADVANCED_SETUP -eq 1 ]; then
-
-			if [ $SERVER -ne 1 ]; then
-				TEXT="By default, logs are stored in a local Elasticsearch database on this sensor and searchable from the master server via cross cluster search.\n\nAlternatively, if you would like a minimal stripped down sensor, you can opt to simply forward logs to the master server.\nHowever, if you choose this option, you should be careful not to overwhelm your master server.\n\nWould you like to store logs locally on $HOSTNAME?"
-				YES="Yes, store logs locally."
-				NO="No, forward logs to $SERVERNAME."
-				zenity --question --title="$TITLE" --text="$TEXT" --ok-label="$YES" --cancel-label="$NO" --no-wrap
-				ANSWER="$?"
-				if [ $ANSWER -eq 0 ]; then
-					[ $DEBUG -eq 1 ] && echo "DEBUG: Process logs locally."
-					FORWARD="NO"
-				else
-					[ $DEBUG -eq 1 ] && echo "DEBUG: Forward logs to $SERVERNAME."
-					FORWARD="YES"
-					FORWARD_CONFIRM="- Forward logs from $HOSTNAME to $SERVERNAME."
-				fi
-			fi
-
-			if [ "$FORWARD" = "NO" ]; then
-				LOG_SIZE_LIMIT_CONFIRMED="no"
-				while [ $LOG_SIZE_LIMIT_CONFIRMED = "no" ]; do
-					LOG_SIZE_LIMIT_GB=`zenity --entry --title "$TITLE" --text="How much disk space (in GigaBytes) should be allocated for Elasticsearch to store logs?\n\nPlease enter an integer greater than 0.  The default is half your disk size.\n\nPlease make sure that the value you set here is less than the size of your disk!\n\nIf you need to adjust this later, you can modify the value for disk__space in /etc/curator/action/delete.yml." --entry-text=$LOG_SIZE_LIMIT_GB`
-					[ $? = 1 ] && exit
-					if [ x$LOG_SIZE_LIMIT_GB = "x" ]; then
-						zenity --error --title "$TITLE" --text "Invalid log size limit! Please use integers greater than 0 and less than your disk size."
-					else
-						COMPRESSED="$(echo $LOG_SIZE_LIMIT_GB | sed -e 's/[^[:digit:]]//g')"
-						[ "$COMPRESSED" == "$LOG_SIZE_LIMIT_GB" ] && 
-						[ $LOG_SIZE_LIMIT_GB -gt 0 ] && 
-						[ $LOG_SIZE_LIMIT_GB -lt $DISK_SIZE_GB ] && 
-						LOG_SIZE_LIMIT_CONFIRMED="yes" || 
-						zenity --error --title "$TITLE" --text "Invalid log size limit! Please use integers greater than 0 and less than your disk size." 
-					fi
-				done
-			
-				let LOG_SIZE_LIMIT=LOG_SIZE_LIMIT_GB*1000000000
-				[ $DEBUG -eq 1 ] && echo "DEBUG: LOG_SIZE_LIMIT set to $LOG_SIZE_LIMIT."
-			fi
-		fi
+		ELASTIC="no"
 	fi
 fi
 
+#########################################
+# Configure master to output to redis?
+#########################################
+if [ "$ELASTIC" = "yes" ] && [ $ADVANCED_SETUP -eq 1 ] && [ $SERVER -eq 1 ]; then
+	TEXT="By default, the master server stores logs in its own local Elasticsearch database via a local Logstash instance.\n\
+\n\
+If you want to forward logs from multiple sensors to this master server, then you may overwhelm those single instances of Logstash and Elasticsearch.\n\
+You may want to consider load balancing these forwarded logs to additional storage nodes.\n\
+\n\
+Would you like to store logs locally on $HOSTNAME?"
+	YES="Yes, store logs locally."
+	NO="No, I will add storage nodes for load balancing."
+	zenity --question --title="$TITLE" --text="$TEXT" --ok-label="$YES" --cancel-label="$NO" --no-wrap
+	ANSWER="$?"
+	if [ $ANSWER -eq 0 ]; then
+		LOGSTASH_OUTPUT_REDIS="no"
+	else
+		LOGSTASH_OUTPUT_REDIS="yes"
+		FORWARD_CONFIRM="- Load balance to additional storage nodes."
+	fi
+fi
+
+#########################################
+# ES LOG_SIZE_LIMIT
+#########################################
+if [ "$ELASTIC" = "yes" ] && [ $ADVANCED_SETUP -eq 1 ] && [ "$FORWARD" != "yes" ] && [ "$LOGSTASH_OUTPUT_REDIS" != "yes" ]; then
+	LOG_SIZE_LIMIT_CONFIRMED="no"
+	while [ $LOG_SIZE_LIMIT_CONFIRMED = "no" ]; do
+		LOG_SIZE_LIMIT_GB=`zenity --entry --title "$TITLE" --text="How much disk space (in GigaBytes) should be allocated for Elasticsearch to store logs?\n\
+\n\
+Please enter an integer greater than 0.\n\
+\n\
+Please make sure that the value you set here is less than the size of your disk!\n\
+\n\
+If you need to adjust this later, you can modify the value for disk__space in /etc/curator/action/delete.yml." --entry-text=$LOG_SIZE_LIMIT_GB`
+		[ $? = 1 ] && exit
+		if [ x$LOG_SIZE_LIMIT_GB = "x" ]; then
+			zenity --error --title "$TITLE" --text "Invalid log size limit! Please use integers greater than 0 and less than your disk size."
+		else
+			COMPRESSED="$(echo $LOG_SIZE_LIMIT_GB | sed -e 's/[^[:digit:]]//g')"
+			[ "$COMPRESSED" == "$LOG_SIZE_LIMIT_GB" ] && 
+			[ $LOG_SIZE_LIMIT_GB -gt 0 ] && 
+			[ $LOG_SIZE_LIMIT_GB -lt $DISK_SIZE_GB ] && 
+			LOG_SIZE_LIMIT_CONFIRMED="yes" || 
+			zenity --error --title "$TITLE" --text "Invalid log size limit!\n\nPlease use integers greater than 0 and less than your disk size." 
+		fi
+	done
+
+	let LOG_SIZE_LIMIT=LOG_SIZE_LIMIT_GB*1000000000
+	[ $DEBUG -eq 1 ] && echo "DEBUG: LOG_SIZE_LIMIT set to $LOG_SIZE_LIMIT."
+fi
+
 # Set ELASTIC_ACTION_CONFIRM
-if [ "$ELASTIC" = "NO" ]; then
+if [ "$ELASTIC" = "no" ]; then
 	ELASTIC_ACTION_CONFIRM="- Disable Elastic stack."
 else
 	if [ $SERVER -eq 1 ]; then
 	    	ELASTIC_ACTION_CONFIRM="- Configure Elastic Stack.\n"
 	else
-		if [ "$FORWARD" = "NO" ]; then
+		if [ "$FORWARD" = "no" ]; then
     			ELASTIC_ACTION_CONFIRM="- Configure Elastic Stack cross cluster search.\n"
 		fi
   	fi
@@ -1121,8 +1099,8 @@ echo "# Please wait while setting OSSEC timezone to UTC..." | tee -a $LOG
 cp /etc/localtime /var/ossec/etc/localtime
 chown root:ossec /var/ossec/etc/localtime
 
-# If user enabled ELSA, configure OSSEC to send alerts to local syslog
-if [ "$ELASTIC" = "YES" ]; then
+# If user enabled ELASTIC, configure OSSEC to send alerts to local syslog
+if [ "$ELASTIC" = "yes" ]; then
 grep "syslog_output" /var/ossec/etc/ossec.conf >/dev/null || sed -i 's|  <rules>|  <syslog_output>\
       <server>127.0.0.1</server>\
   </syslog_output>\
@@ -1157,7 +1135,7 @@ sed -i "s|^#$HOSTNAME-|$HOSTNAME-|g" $SENSORTAB
 /usr/sbin/nsm_all_del_quick >> $LOG 2>&1
 
 # Delete any existing ELSA databases.
-if [ "$ELASTIC" = "YES" ]; then
+if [ "$ELASTIC" = "yes" ]; then
 	if [ -d /var/lib/mysql/elsa_web/ ]; then
 		mysql --defaults-file=/etc/mysql/debian.cnf -e "drop database elsa_web" >> $LOG 2>&1
 	fi
@@ -1227,26 +1205,17 @@ pkill -f ossec_agent
 # Add the Sguil server if necessary
 #########################################
 if [ $SERVER -eq 1 ]; then
-# If this box was previously a slave, we need to remove securityonion_ssh.conf
-rm -f /root/.ssh/securityonion_ssh.conf
-echo "10"
-echo "# Please wait while creating the Sguil server..." | tee -a $LOG
-/usr/sbin/nsm_server_add --server-name="$SGUIL_SERVER_NAME" --server-sensor-name=NULL --server-sensor-port=7736 --server-client-port=7734 --server-client-user="$SGUIL_CLIENT_USERNAME" --server-client-pass="$SGUIL_CLIENT_PASSWORD_1" --server-auto=yes --force-yes >> $LOG 2>&1
-
+	# If this box was previously a slave, we need to remove securityonion_ssh.conf
+	rm -f /root/.ssh/securityonion_ssh.conf
+	echo "10"
+	echo "# Please wait while creating the Sguil server..." | tee -a $LOG
+	/usr/sbin/nsm_server_add --server-name="$SGUIL_SERVER_NAME" --server-sensor-name=NULL --server-sensor-port=7736 --server-client-port=7734 --server-client-user="$SGUIL_CLIENT_USERNAME" --server-client-pass="$SGUIL_CLIENT_PASSWORD_1" --server-auto=yes --force-yes >> $LOG 2>&1
 fi
 
 #########################################
-# Sguil Sensor(s) if necessary
+# If not master server, configure SSH Key authentication to master server
 #########################################
-if [ $SENSOR -eq 1 ]; then
-echo "15"
-echo "# Please wait while creating Sguil sensor(s)..." | tee -a $LOG
-BY2PORT=8000
-HOST_ORIG=`hostname`
-HOSTNAME=${HOST_ORIG,,}
-
-# Configure SSH Key authentication to server if necessary
-if [ "$SERVERNAME" != "localhost" ]; then
+if [ "$SERVER" -ne 1 ]; then
 	mkdir -p $SSH_DIR		
 	[ -f "$KEY" ] && mv $KEY $KEY.old
         ssh-keygen -f "$KEY" -N '' >> $LOG 2>&1
@@ -1300,6 +1269,18 @@ if [ "$SERVERNAME" != "localhost" ]; then
 	echo "SSH_USERNAME=$SSH_USERNAME" > $SSH_CONF
 	echo "SERVERNAME=$SERVERNAME" >> $SSH_CONF
 fi
+
+fi
+
+#########################################
+# Network Sensor(s) if necessary
+#########################################
+if [ $SENSOR -eq 1 ]; then
+echo "15"
+echo "# Please wait while creating Sguil sensor(s)..." | tee -a $LOG
+BY2PORT=8000
+HOST_ORIG=`hostname`
+HOSTNAME=${HOST_ORIG,,}
 
 # NIDS sensor(s)
 for INTERFACE in $ALL_INTERFACES; do	
@@ -1830,7 +1811,7 @@ EOF
 	sed -i 's|Name=README|Name=Squert|g' $SQUERT_LAUNCHER
 
 	# Use README launcher as template to create Kibana launcher (if enabled)
-	if [ "$ELASTIC" = "YES" ]; then
+	if [ "$ELASTIC" = "yes" ]; then
 		KIBANA_LAUNCHER="$DIR/securityonion-kibana.desktop"
 		cp $README_LAUNCHER $KIBANA_LAUNCHER
 		sed -i 's|https://localhost|https://localhost/app/kibana|g' $KIBANA_LAUNCHER
@@ -1860,7 +1841,7 @@ fi
 #########################################
 # Configure Elastic
 #########################################
-if [ "$ELASTIC" = "YES" ]; then
+if [ "$ELASTIC" = "yes" ]; then
     echo "49"
     echo "# Please wait while configuring Elastic..." | tee -a $LOG
 
@@ -1929,6 +1910,27 @@ EOF
         	sed "s/LOG_SIZE_LIMIT=.*/LOG_SIZE_LIMIT=$LOG_SIZE_LIMIT_GB/" $CONF
 	fi
 
+	if [ $SERVER -eq 1 ] && [ $LOGSTASH_OUTPUT_REDIS = "yes" ]; then
+		echo "LOGSTASH_OUTPUT_REDIS=$LOGSTASH_OUTPUT_REDIS" >> $CONF
+	fi
+
+	if [ $SERVER -ne 1 ]; then
+		echo 'KIBANA_ENABLED="no"' >> $CONF
+		echo 'ELASTALERT_ENABLED="no"' >> $CONF
+		echo 'FREQ_SERVER_ENABLED="no"' >> $CONF
+		echo 'DOMAIN_STATS_ENABLED="no"' >> $CONF
+
+		if [ "$FORWARD" = "yes" ]; then
+			echo 'ELASTICSEARCH_ENABLED="no"' >> $CONF
+			echo 'LOGSTASH_ENABLED="no"' >> $CONF
+			echo 'CURATOR_ENABLED="no"' >> $CONF
+		fi
+
+		if [ "$LOGSTASH_INPUT_REDIS" = "yes" ]; then
+			echo 'LOGSTASH_INPUT_REDIS="yes"' >> $CONF
+		fi
+	fi
+
 	/usr/sbin/so-elastic-configure >> $LOG 2>&1
 
 	if [ $SERVER -ne 1 ]; then
@@ -1936,31 +1938,6 @@ EOF
 		echo "# Please wait while stopping Apache web server..." | tee -a $LOG
 		service apache2 stop >> $LOG 2>&1
 
-    		if [ "$FORWARD" = "YES" ]; then
-                        echo "87"
-                        echo "# Please wait while stopping and disabling Logstash..." | tee -a $LOG
-                        docker stop so-logstash >> $LOG 2>&1
-                        sed -i 's|LOGSTASH_ENABLED="yes"|LOGSTASH_ENABLED="no"|g' $CONF
-                        echo "88"
-                        echo "# Please wait while stopping and disabling Elasticsearch..." | tee -a $LOG
-                        docker stop so-elasticsearch >> $LOG 2>&1
-                        sed -i 's|ELASTICSEARCH_ENABLED="yes"|ELASTICSEARCH_ENABLED="no"|g' $CONF
-                        echo "89"
-                        echo "# Please wait while stopping and disabling Curator..." | tee -a $LOG
-                        docker stop so-curator >> $LOG 2>&1
-                        sed -i 's|CURATOR_ENABLED="yes"|CURATOR_ENABLED="no"|g' $CONF
-                fi
-		
-		echo "90"
-		echo "# Please wait while stopping and disabling Kibana..." | tee -a $LOG
-		docker stop so-kibana >> $LOG 2>&1
-		sed -i 's|KIBANA_ENABLED="yes"|KIBANA_ENABLED="no"|g' $CONF
-		
-		echo "91"
-                echo "# Please wait while stopping and disabling ElastAlert..." | tee -a $LOG
-                docker stop so-elastalert >> $LOG 2>&1
-                sed -i 's|ELASTALERT_ENABLED="yes"|ELASTALERT_ENABLED="no"|g' $CONF
-		
     		echo "93"
 		echo "# Please wait while stopping and disabling MySQL..." | tee -a $LOG
 		service mysql stop >> $LOG 2>&1
@@ -1969,67 +1946,76 @@ EOF
     		echo "95"
 		echo "# Please wait while performing final sensor configuration..." | tee -a $LOG
 
-		# We need to determine a few things from the master server:
-		# DOCKER_INTERFACE, DOCKER_NETWORK, and REVERSE_PORT
-
-		# DOCKER_INTERFACE
-		SSH_CMD="sudo /usr/sbin/so-elastic-network | jq '.[0].IPAM.Config[0].Gateway'"
-		SSH_OUTPUT=`ssh -i $KEY $SSH_USERNAME@$SERVERNAME "$SSH_CMD"`
-		DOCKER_INTERFACE=$(echo $SSH_OUTPUT | cut -d\" -f2)
-		echo "DOCKER_INTERFACE is $DOCKER_INTERFACE" >> $LOG 2>&1
-
-		# DOCKER_NETWORK
-		SSH_CMD="sudo /usr/sbin/so-elastic-network | jq '.[0].IPAM.Config[0].Subnet'"
-		SSH_OUTPUT=`ssh -i $KEY $SSH_USERNAME@$SERVERNAME "$SSH_CMD"`
-		DOCKER_NETWORK=$(echo $SSH_OUTPUT | cut -d\" -f2)
-		echo "DOCKER_NETWORK is $DOCKER_NETWORK" >> $LOG 2>&1
-
-		# REVERSE_PORT
-		SSH_CMD="cat /etc/nsm/crossclustertab | cut -d: -f2 | grep '^5' | sort | tail -1"
-		HIGHEST_REVERSE_PORT=`ssh -i $KEY $SSH_USERNAME@$SERVERNAME "$SSH_CMD"`
-		if [ "$HIGHEST_REVERSE_PORT" = "" ]; then
-			echo "Found no other sensors." >> $LOG 2>&1
-			REVERSE_PORT=50000
-		else
-			echo "HIGHEST_REVERSE_PORT is $HIGHEST_REVERSE_PORT" >> $LOG 2>&1
-			if [ ${HIGHEST_REVERSE_PORT} -gt 49999 ] && [ ${HIGHEST_REVERSE_PORT} -lt 59999 ]; then
-				let REVERSE_PORT=HIGHEST_REVERSE_PORT+1
-			fi
-		fi
-		echo "REVERSE_PORT is $REVERSE_PORT" >> $LOG 2>&1
-
-		# Now that we've determined those 3 values, we need to store DOCKER_INTERFACE and REVERSE_PORT in SSH_CONF.
-
-    		# If DOCKER_INTERFACE is not already in SSH_CONF, then store it for future use.
-		if grep "DOCKER_INTERFACE=" $SSH_CONF >/dev/null 2>&1; then
-			echo "DOCKER_INTERFACE already exists in $SSH_CONF." >> $LOG 2>&1
-		else
-			echo "DOCKER_INTERFACE=$DOCKER_INTERFACE" >> $SSH_CONF
-		fi
-
-    		# If REVERSE_PORT is not already in SSH_CONF, then store it for future use.
-		if grep "REVERSE_PORT=" $SSH_CONF >/dev/null 2>&1; then
-			echo "REVERSE_PORT already exists in $SSH_CONF." >> $LOG 2>&1
-		else
-			echo "REVERSE_PORT=$REVERSE_PORT" >> $SSH_CONF
-		fi
-		
-		if [ "$FORWARD" = "YES" ]; then
+    		if [ "$FORWARD" = "yes" ]; then
                         # If AUTOSSH_OPTIONS is already in SSH_CONF, remove it and replace it with new value.
                         if grep "AUTOSSH_OPTIONS=" $SSH_CONF >/dev/null 2>&1; then
                                 sed -i 's/AUTOSSH_OPTIONS.*/AUTOSSH_OPTIONS="-L 6050:localhost:6050"/' $SSH_CONF >> $LOG 2>&1
                         else
                                 echo 'AUTOSSH_OPTIONS="-L 6050:localhost:6050"' >> $SSH_CONF
                         fi
-                fi
+		else
+			if [ "$LOGSTASH_INPUT_REDIS" = "yes" ]; then
+		                if grep "AUTOSSH_OPTIONS=" $SSH_CONF >/dev/null 2>&1; then
+		                        sed -i 's/AUTOSSH_OPTIONS.*/AUTOSSH_OPTIONS="-L 6379:localhost:6379"/' $SSH_CONF >> $LOG 2>&1
+		                else
+		                        echo 'AUTOSSH_OPTIONS="-L 6379:localhost:6379"' >> $SSH_CONF
+		                fi
+				ufw allow proto tcp from 172.18.0.0/24 to 172.18.0.1 port 6379 >> $LOG 2>&1
+			fi
 
-		# Configure Elasticsearch
-		ELASTIC_CONFIG="/etc/elasticsearch/elasticsearch.yml"
-		echo "transport.bind_host: 0.0.0.0" >> $ELASTIC_CONFIG
-		echo "transport.publish_host: $DOCKER_INTERFACE" >> $ELASTIC_CONFIG
-		echo "transport.publish_port: $REVERSE_PORT" >> $ELASTIC_CONFIG
-		docker restart so-elasticsearch >> $LOG 2>&1
-		cat << EOF >> $SOSETUPSCP
+			# We need to determine a few things from the master server:
+
+			# DOCKER_INTERFACE, DOCKER_NETWORK, and REVERSE_PORT
+
+			# DOCKER_INTERFACE
+			SSH_CMD="sudo /usr/sbin/so-elastic-network | jq '.[0].IPAM.Config[0].Gateway'"
+			SSH_OUTPUT=`ssh -i $KEY $SSH_USERNAME@$SERVERNAME "$SSH_CMD"`
+			DOCKER_INTERFACE=$(echo $SSH_OUTPUT | cut -d\" -f2)
+			echo "DOCKER_INTERFACE is $DOCKER_INTERFACE" >> $LOG 2>&1
+
+			# DOCKER_NETWORK
+			SSH_CMD="sudo /usr/sbin/so-elastic-network | jq '.[0].IPAM.Config[0].Subnet'"
+			SSH_OUTPUT=`ssh -i $KEY $SSH_USERNAME@$SERVERNAME "$SSH_CMD"`
+			DOCKER_NETWORK=$(echo $SSH_OUTPUT | cut -d\" -f2)
+			echo "DOCKER_NETWORK is $DOCKER_NETWORK" >> $LOG 2>&1
+
+			# REVERSE_PORT
+			SSH_CMD="cat /etc/nsm/crossclustertab | cut -d: -f2 | grep '^5' | sort | tail -1"
+			HIGHEST_REVERSE_PORT=`ssh -i $KEY $SSH_USERNAME@$SERVERNAME "$SSH_CMD"`
+			if [ "$HIGHEST_REVERSE_PORT" = "" ]; then
+				echo "Found no other sensors." >> $LOG 2>&1
+				REVERSE_PORT=50000
+			else
+				echo "HIGHEST_REVERSE_PORT is $HIGHEST_REVERSE_PORT" >> $LOG 2>&1
+				if [ ${HIGHEST_REVERSE_PORT} -gt 49999 ] && [ ${HIGHEST_REVERSE_PORT} -lt 59999 ]; then
+					let REVERSE_PORT=HIGHEST_REVERSE_PORT+1
+				fi
+			fi
+			echo "REVERSE_PORT is $REVERSE_PORT" >> $LOG 2>&1
+
+			# Now that we've determined those 3 values, we need to store DOCKER_INTERFACE and REVERSE_PORT in SSH_CONF.
+	
+    			# If DOCKER_INTERFACE is not already in SSH_CONF, then store it for future use.
+			if grep "DOCKER_INTERFACE=" $SSH_CONF >/dev/null 2>&1; then
+				echo "DOCKER_INTERFACE already exists in $SSH_CONF." >> $LOG 2>&1
+			else
+				echo "DOCKER_INTERFACE=$DOCKER_INTERFACE" >> $SSH_CONF
+			fi
+
+	    		# If REVERSE_PORT is not already in SSH_CONF, then store it for future use.
+			if grep "REVERSE_PORT=" $SSH_CONF >/dev/null 2>&1; then
+				echo "REVERSE_PORT already exists in $SSH_CONF." >> $LOG 2>&1
+			else
+				echo "REVERSE_PORT=$REVERSE_PORT" >> $SSH_CONF
+			fi
+
+			# Configure Elasticsearch
+			ELASTIC_CONFIG="/etc/elasticsearch/elasticsearch.yml"
+			echo "transport.bind_host: 0.0.0.0" >> $ELASTIC_CONFIG
+			echo "transport.publish_host: $DOCKER_INTERFACE" >> $ELASTIC_CONFIG
+			echo "transport.publish_port: $REVERSE_PORT" >> $ELASTIC_CONFIG
+			docker restart so-elasticsearch >> $LOG 2>&1
+			cat << EOF >> $SOSETUPSCP
 if ! grep "Match User $SSH_USERNAME" /etc/ssh/sshd_config >/dev/null 2>&1; then
 echo Match User $SSH_USERNAME >> /etc/ssh/sshd_config
 echo '   GatewayPorts clientspecified' >> /etc/ssh/sshd_config
@@ -2039,8 +2025,9 @@ ufw allow proto tcp from $DOCKER_NETWORK to $DOCKER_INTERFACE port $REVERSE_PORT
 source /etc/nsm/securityonion.conf
 curl -XPUT http://\$ELASTICSEARCH_HOST:\$ELASTICSEARCH_PORT/_cluster/settings -H'Content-Type: application/json' -d '{"persistent": {"search": {"remote": {"$HOSTNAME": {"seeds": ["$DOCKER_INTERFACE:$REVERSE_PORT"]}}}}}'
 EOF
-	fi
+		fi
 
+	fi
 fi
 }
 
@@ -2062,7 +2049,7 @@ if [ "$SERVERNAME" != "localhost" ]; then
 	ssh -i "$KEY" -t $SSH_USERNAME@$SERVERNAME rm -f $SOSETUPSCP >> $LOG 2>&1
 fi
 
-if [ $SERVER -ne 1 ] && [ "$ELASTIC" = "YES" ]; then
+if [ $SERVER -ne 1 ] && [ "$ELASTIC" = "yes" ]; then
 	# Now that the server side configuration is done, we need to tear down the ssh tunnel and restart it.
 	if pgrep autossh>/dev/null; then 
 		kill -SIGINT `pgrep autossh`
@@ -2205,9 +2192,6 @@ save()
 	echo "SGUIL_CLIENT_USERNAME='$SGUIL_CLIENT_USERNAME'" >> $WRITEANSWERFILE
 	echo "SGUIL_CLIENT_PASSWORD_1='$SGUIL_CLIENT_PASSWORD_1'" >> $WRITEANSWERFILE
 	echo "XPLICO_ENABLED=$XPLICO_ENABLED" >> $WRITEANSWERFILE
-	echo "ELASTIC=$ELASTIC" >> $WRITEANSWERFILE
-	echo "UPDATE_ELSA_SERVER=$UPDATE_ELSA_SERVER" >> $WRITEANSWERFILE
-	echo "LOG_SIZE_LIMIT=$LOG_SIZE_LIMIT" >> $WRITEANSWERFILE
 	echo "OSSEC_AGENT_ENABLED=$OSSEC_AGENT_ENABLED" >> $WRITEANSWERFILE
 	echo "OSSEC_AGENT_LEVEL=$OSSEC_AGENT_LEVEL" >> $WRITEANSWERFILE
 	echo "SALT=$SALT" >> $WRITEANSWERFILE
@@ -2237,6 +2221,10 @@ save()
 	echo "CRIT_DISK_USAGE=$CRIT_DISK_USAGE" >> $WRITEANSWERFILE
 	echo "DAYSTOKEEP=$DAYSTOKEEP" >> $WRITEANSWERFILE
 	echo "DAYSTOREPAIR=$DAYSTOREPAIR" >> $WRITEANSWERFILE
+	echo "LOGSTASH_OUTPUT_REDIS=$LOGSTASH_OUTPUT_REDIS" >> $WRITEANSWERFILE
+	echo "LOGSTASH_INPUT_REDIS=$LOGSTASH_INPUT_REDIS" >> $WRITEANSWERFILE
+	echo "ELASTIC=$ELASTIC" >> $WRITEANSWERFILE
+	echo "LOG_SIZE_LIMIT=$LOG_SIZE_LIMIT" >> $WRITEANSWERFILE
 }
 
 

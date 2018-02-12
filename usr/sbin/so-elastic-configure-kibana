@@ -8,10 +8,13 @@ if [ "${KIBANA_ENABLED}" = "no" ]; then
 
 else
 
-	. /usr/sbin/so-elastic-configure-kibana-config
-
+	# Load dashboards and index patterns first
 	. /usr/sbin/so-elastic-configure-kibana-dashboards
 
+	# Then set default index pattern and other config
+	. /usr/sbin/so-elastic-configure-kibana-config
+
+	# Finally, fix all shortcuts
 	. /usr/sbin/so-elastic-configure-kibana-shortcuts
 
 fi

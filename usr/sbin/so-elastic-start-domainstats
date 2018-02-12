@@ -13,10 +13,11 @@ if [ "$DOMAIN_STATS_ENABLED" = "yes" ]; then
 		# All communication will happen on $DOCKERNET
                 docker run --name=so-domainstats \
                         --detach \
+                        --network-alias=domainstats \
+                        --network="${DOCKERNET}" \
                         --volume /var/log/domain_stats:/var/log/domain_stats \
                         $DOMAIN_STATS_OPTIONS \
                         $DOCKERHUB/so-domainstats
-                        docker network connect --alias domainstats $DOCKERNET so-domainstats
         fi
 fi
 

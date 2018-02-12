@@ -1,0 +1,12 @@
+#!/bin/bash
+
+. /usr/sbin/so-common
+
+echo "Stopping so-autossh..."
+/usr/sbin/so-autossh-stop  >/dev/null
+echo
+echo "Starting so-autossh..."
+/usr/sbin/so-autossh-start >/dev/null
+echo
+echo "Checking status of so-autossh..."
+/usr/sbin/so-autossh-status

@@ -2,29 +2,23 @@
 
 . /usr/sbin/so-elastic-common
 
+MYSQL="mysql --defaults-file=/etc/mysql/debian.cnf -sN"
+EXPORT="/nsm/export"
+BRO="$EXPORT/bro"
+
 if [ "$#" -ne 1 ]; then
 # Obligatory warning and disclaimers
 cat << EOF 
-This QUICK and DIRTY script should dump logs from ELSA into log files that can easily be read using syslog-ng and sent to Elasticsearch.
+This QUICK and DIRTY script should export logs from ELSA into log files that you can search using standard tools and/or import into Elasticsearch.
 
-TODO
-* error checking
-* testing
-* testing
-* more testing
-* have it try to reclaim disk space as it goes
-
-HARDWARE REQUIREMENTS
-Make sure you have plenty of free disk space as this is essentially creating 2 additional copies of each log (1 in the filesystem and 1 in Elasticsearch).
+Exported log files will be written to $EXPORT.
 
 WARNINGS AND DISCLAIMERS
-* This technology PREVIEW is PRE-ALPHA, BLEEDING EDGE, and TOTALLY UNSUPPORTED!
+* this script has NO error checking
+* make sure you have plenty of free disk space as this is essentially duplicating all your logs
+* this script has had very little testing
+* this script is TOTALLY UNSUPPORTED!
 * If this breaks your system, you get to keep both pieces!
-* This script is a work in progress and is in constant flux.
-* Do NOT run this on a system that you care about!
-* Do NOT run this on a system that has data that you care about!
-* This script should only be run on a TEST box with TEST data!
-* This script is only designed for standalone boxes and does NOT support distributed deployments.
 * Use of this script may result in nausea, vomiting, or a burning sensation.
  
 Once you've read all of the WARNINGS AND DISCLAIMERS above, please type AGREE to proceed:
@@ -33,10 +27,8 @@ read INPUT
 if [ "$INPUT" != "AGREE" ] ; then exit 0; fi
 fi
 
-MYSQL="mysql --defaults-file=/etc/mysql/debian.cnf -sN"
-DIR="/nsm/import/bro"
-mkdir -p $DIR
-cd /nsm/import
+mkdir -p $BRO
+cd $EXPORT
 
 for table_name in `$MYSQL -Dsyslog_data -e 'show tables where Tables_in_syslog_data like "syslogs_index_%";'`; do
 	echo "Processing table $table_name"
@@ -53,3 +45,12 @@ for bro_log in bro_*; do
 	echo "Moving $bro_log to bro/$log"
 	mv $bro_log bro/$log
 done
+
+cat << EOF
+If you would like to import these logs into Elastic, you can move them to /nsm/import/.
+
+However, please be aware of a few things:
+
+* Make sure you have plenty of free disk space as this is creating yet another copy of these logs.
+* Logstash parsers only support the current version of Bro.  Older Bro logs may not be parsed properly.
+EOF
